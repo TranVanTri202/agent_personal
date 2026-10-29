@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "strategy": "rules",
+  "defaultModel": "openai/gpt-4o-mini",
+  "taskModels": {
+    "chat": "openai/gpt-4o-mini",
+    "intent_classification": "openai/gpt-4o-mini",
+    "planning": "anthropic/claude-3.5-haiku",
+    "tool_calling": "openai/gpt-4o-mini",
+    "gmail_read": "google/gemini-flash-1.5",
+    "gmail_summary": "google/gemini-flash-1.5",
+    "gmail_draft": "openai/gpt-4o-mini",
+    "document_summary": "google/gemini-flash-1.5",
+    "document_extraction": "openai/gpt-4o-mini",
+    "coding": "deepseek/deepseek-chat",
+    "image_understanding": "openai/gpt-4o-mini",
+    "translation": "openai/gpt-4o-mini",
+    "general_reasoning": "anthropic/claude-3.5-haiku"
+  },
+  "requirements": {
+    "tool_calling": ["tools"],
+    "image_understanding": ["image_input"],
+    "document_extraction": ["structured_output"]
+  },
+  "modelAllowlist": [],
+  "modelDenylist": [],
+  "adaptive": {
+    "enabled": false,
+    "profile": "balanced",
+    "candidateModelsByTask": {
+      "chat": ["openai/gpt-4o-mini", "google/gemini-flash-1.5"],
+      "tool_calling": ["openai/gpt-4o-mini", "anthropic/claude-3.5-haiku"],
+      "image_understanding": ["openai/gpt-4o-mini", "google/gemini-flash-1.5"]
+    },
+    "qualityScoresSource": "./config/model-evaluations.json"
+  }
+}

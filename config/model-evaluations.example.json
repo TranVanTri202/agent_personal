@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "description": "Task-specific quality and benchmark scores for adaptive model routing",
+  "scores": {
+    "openai/gpt-4o-mini": {
+      "chat": 0.88,
+      "tool_calling": 0.92,
+      "gmail_draft": 0.89,
+      "coding": 0.85,
+      "latency_p50_ms": 650
+    },
+    "anthropic/claude-3.5-haiku": {
+      "chat": 0.91,
+      "tool_calling": 0.93,
+      "planning": 0.94,
+      "general_reasoning": 0.93,
+      "latency_p50_ms": 700
+    },
+    "google/gemini-flash-1.5": {
+      "chat": 0.86,
+      "gmail_summary": 0.92,
+      "document_summary": 0.94,
+      "image_understanding": 0.90,
+      "latency_p50_ms": 600
+    },
+    "deepseek/deepseek-chat": {
+      "coding": 0.93,
+      "general_reasoning": 0.91,
+      "latency_p50_ms": 800
+    }
+  }
+}
