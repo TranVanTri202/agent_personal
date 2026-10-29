@@ -1,0 +1,510 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserRole {
+  OWNER
+  ALLOWED_USER
+  UNKNOWN
+}
+
+enum ConversationType {
+  PRIVATE
+  GROUP
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VOICE
+  STICKER
+  FILE
+  UNSUPPORTED
+}
+
+enum EventStatus {
+  PENDING
+  PROCESSED
+  FAILED
+  IGNORED
+}
+
+enum TaskStatus {
+  PENDING
+  PLANNING
+  RUNNING
+  WAITING_APPROVAL
+  COMPLETED
+  RETRYING
+  FAILED
+  CANCELLED
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  DENIED
+  EXPIRED
+}
+
+enum StorageProviderType {
+  LOCAL
+  R2
+  SUPABASE
+}
+
+enum FileStatus {
+  UPLOADING
+  ACTIVE
+  DELETING
+  DELETED
+  DELETE_FAILED
+}
+
+model User {
+  id          String   @id @default(uuid())
+  zaloUserId  String   @unique
+  displayName String?
+  role        UserRole @default(UNKNOWN)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  conversations   Conversation[]
+  tasks           AgentTask[]
+  approvals       Approval[]
+  storedFiles     StoredFile[]
+  memories        Memory[]
+  emailAccounts   EmailAccount[]
+  scheduledTasks  ScheduledTask[]
+  reminders       Reminder[]
+  pairingTokens   PairingToken[]
+
+  @@index([zaloUserId])
+}
+
+model PairingToken {
+  id         String   @id @default(uuid())
+  codeHash   String   @unique
+  expiresAt  DateTime
+  isUsed     Boolean  @default(false)
+  usedByZaloId String?
+  createdAt  DateTime @default(now())
+
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Conversation {
+  id             String           @id @default(uuid())
+  channel        String           @default("ZALO_OFFICIAL_BOT")
+  externalChatId String
+  type           ConversationType @default(PRIVATE)
+  ownerId        String?
+  conversationEpoch Int              @default(1)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  owner          User?            @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  messages       Message[]
+  tasks          AgentTask[]
+
+  @@unique([channel, externalChatId])
+  @@index([externalChatId])
+}
+
+model Message {
+  id                String           @id @default(uuid())
+  conversationId    String
+  externalMessageId String?
+  direction         MessageDirection
+  content           String           @db.Text
+  type              MessageType      @default(TEXT)
+  epoch             Int              @default(1)
+  attachmentsJson   Json?
+  metadataJson      Json?
+  createdAt         DateTime         @default(now())
+
+  conversation      Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@index([externalMessageId])
+}
+
+model InboundEvent {
+  id                  String      @id @default(uuid())
+  channel             String      @default("ZALO_OFFICIAL_BOT")
+  externalEventId     String      @unique
+  eventType           String
+  payloadRedactedJson Json
+  status              EventStatus @default(PENDING)
+  error               String?     @db.Text
+  receivedAt          DateTime    @default(now())
+  processedAt         DateTime?
+
+  @@index([channel, externalEventId])
+  @@index([status])
+}
+
+model AgentTask {
+  id             String     @id @default(uuid())
+  ownerId        String?
+  conversationId String?
+  request        String     @db.Text
+  title          String?
+  status         TaskStatus @default(PENDING)
+  priority       Int        @default(1)
+  resultSummary  String?    @db.Text
+  error          String?    @db.Text
+  createdAt      DateTime   @default(now())
+  startedAt      DateTime?
+  completedAt    DateTime?
+
+  owner          User?            @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  conversation   Conversation?    @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  steps          TaskStep[]
+  toolExecutions ToolExecution[]
+  approvals      Approval[]
+  storedFiles    StoredFile[]
+
+  @@index([ownerId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model TaskStep {
+  id                 String    @id @default(uuid())
+  taskId             String
+  sequence           Int
+  toolName           String
+  sanitizedInputJson  Json?
+  sanitizedOutputJson Json?
+  status             String
+  startedAt          DateTime  @default(now())
+  durationMs         Int?
+
+  task               AgentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, sequence])
+}
+
+model ToolExecution {
+  id                String    @id @default(uuid())
+  taskId            String
+  toolCallId        String    @unique
+  toolName          String
+  status            String
+  redactedInputJson Json?
+  redactedOutputJson Json?
+  timingsMs         Int?
+  error             String?   @db.Text
+  createdAt         DateTime  @default(now())
+
+  task              AgentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([toolCallId])
+}
+
+model Approval {
+  id                       String         @id @default(uuid())
+  taskId                   String
+  ownerId                  String
+  actionType               String
+  exactActionHash          String
+  encryptedOrRedactedPayload Json
+  codeHash                 String         @unique
+  status                   ApprovalStatus @default(PENDING)
+  expiresAt                DateTime
+  decidedAt                DateTime?
+  executedAt               DateTime?
+  createdAt                DateTime       @default(now())
+
+  task                     AgentTask      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  owner                    User           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([ownerId])
+  @@index([status])
+  @@index([codeHash])
+}
+
+model StoredFile {
+  id                  String              @id @default(uuid())
+  ownerId             String?
+  taskId              String?
+  conversationId      String?
+  provider            StorageProviderType @default(LOCAL)
+  bucket              String?
+  objectKey           String              @unique
+  originalName        String
+  mimeType            String
+  sizeBytes           BigInt
+  checksum            String
+  status              FileStatus          @default(ACTIVE)
+  uploadedAt          DateTime?           @default(now())
+  expiresAt           DateTime?
+  lastDeleteAttemptAt DateTime?
+  deleteAttemptCount  Int                 @default(0)
+  deletedAt           DateTime?
+  lastErrorCode       String?             @db.Text
+  source              String?             @default("incoming")
+  originalMessageId   String?
+  derivedFromMediaId  String?
+  analysisSummary     String?             @db.Text
+  analysisModel       String?
+  analysisCreatedAt   DateTime?
+  retentionUntil      DateTime?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @default(now()) @updatedAt
+
+  owner               User?               @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  task                AgentTask?          @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  generatedImage      GeneratedImage?
+
+  @@index([ownerId])
+  @@index([taskId])
+  @@index([conversationId])
+  @@index([objectKey])
+  @@index([status, expiresAt])
+  @@index([expiresAt])
+}
+
+model Memory {
+  id         String   @id @default(uuid())
+  ownerId    String
+  category   String   @default("general")
+  text       String   @db.Text
+  source     String?
+  importance Int      @default(1)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  owner      User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId, category])
+}
+
+model EmailAccount {
+  id              String   @id @default(uuid())
+  ownerId         String
+  email           String
+  provider        String   @default("google")
+  scopes          String
+  encryptedTokens String   @db.Text
+  status          String   @default("connected")
+  connectedAt     DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  owner           User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  messages        EmailMessageIndex[]
+
+  @@unique([ownerId, email])
+  @@index([ownerId])
+}
+
+model EmailMessageIndex {
+  id             String       @id @default(uuid())
+  accountId      String
+  gmailMessageId String       @unique
+  threadId       String
+  subject        String?
+  sender         String?
+  receivedAt     DateTime
+  classification String?
+  summary        String?      @db.Text
+  createdAt      DateTime     @default(now())
+
+  account        EmailAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, threadId])
+  @@index([accountId, receivedAt])
+}
+
+model ScheduledTask {
+  id             String   @id @default(uuid())
+  ownerId        String
+  name           String
+  timezone       String   @default("Asia/Ho_Chi_Minh")
+  scheduleType   String   // "ONCE" | "CRON"
+  cronExpression String?
+  runAt          DateTime?
+  payloadJson    Json
+  enabled        Boolean  @default(true)
+  nextRunAt      DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  owner          User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+  @@index([enabled, nextRunAt])
+}
+
+model Skill {
+  id              String   @id @default(uuid())
+  name            String   @unique
+  version         String   @default("1.0.0")
+  description     String   @db.Text
+  schemaJson      Json
+  workflowJson    Json
+  permissionsJson Json
+  enabled         Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([name])
+}
+
+model AuditLog {
+  id                   String   @id @default(uuid())
+  actorId              String?
+  taskId               String?
+  action               String
+  target               String?
+  sanitizedDetailsJson Json?
+  occurredAt           DateTime @default(now())
+
+  @@index([actorId])
+  @@index([taskId])
+  @@index([action])
+  @@index([occurredAt])
+}
+
+model SystemSetting {
+  key         String   @id
+  value       String   @db.Text
+  description String?
+  updatedAt   DateTime @updatedAt
+}
+
+model LLMUsageLog {
+  id               String   @id @default(uuid())
+  taskId           String?
+  conversationId   String?
+  ownerId          String?
+  routingMode      String   @default("single") // "single" | "task"
+  taskCategory     String   @default("chat")
+  requestedModel   String
+  actualModel      String?
+  promptTokens     Int      @default(0)
+  completionTokens Int      @default(0)
+  totalTokens      Int      @default(0)
+  costUsd          Float?
+  latencyMs        Int?
+  routingReason    String?  @db.Text
+  createdAt        DateTime @default(now())
+
+  @@index([ownerId])
+  @@index([taskCategory])
+  @@index([createdAt])
+}
+
+model StickerItem {
+  id        String   @id @default(uuid())
+  stickerId String
+  emotion   String
+  source    String   @default("collector") // "collector" | "manual"
+  addedBy   String?
+  createdAt DateTime @default(now())
+
+  @@unique([stickerId, emotion])
+  @@index([emotion])
+}
+
+model StickerSession {
+  id        String   @id @default(uuid())
+  chatId    String   @unique
+  userId    String
+  emotion   String
+  addedIds  Json     @default("[]")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([chatId])
+}
+
+model GeneratedImage {
+  id             String          @id @default(uuid())
+  ownerId        String
+  conversationId String
+  taskId         String?
+  fileId         String          @unique
+  parentImageId  String?
+  prompt         String          @db.Text
+  modelId        String
+  actionType     String          @default("generate") // "generate" | "edit"
+  aspectRatio    String?
+  resolution     String?
+  costUsd        Float?
+  status         String          @default("completed") // "pending" | "completed" | "failed"
+  createdAt      DateTime        @default(now())
+
+  storedFile     StoredFile      @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  parentImage    GeneratedImage? @relation("ImageEdits", fields: [parentImageId], references: [id], onDelete: SetNull)
+  derivedImages  GeneratedImage[] @relation("ImageEdits")
+
+  @@index([ownerId, conversationId])
+  @@index([createdAt])
+}
+
+model Reminder {
+  id                   String    @id @default(uuid())
+  ownerId              String
+  channel              String    @default("ZALO_OFFICIAL_BOT")
+  recipientChatId      String
+  title                String
+  note                 String?   @db.Text
+  dueAt                DateTime
+  status               String    @default("SCHEDULED") // "PENDING_ENQUEUE" | "SCHEDULED" | "SENDING" | "SENT" | "FAILED" | "CANCELLED"
+  revision             Int       @default(1)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  queuedAt             DateTime?
+  sentAt               DateTime?
+  cancelledAt          DateTime?
+  attemptCount         Int       @default(0)
+  lastError            String?   @db.Text
+  claimedAt            DateTime?
+  claimExpiresAt       DateTime?
+  createdFromMessageId String?
+  sourceConversationId String?
+  isLateNoticeSent     Boolean   @default(false)
+
+  owner                User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+  @@index([status, dueAt])
+  @@index([recipientChatId])
+  @@index([createdFromMessageId])
+}
+
+model ConversationState {
+  id                   String    @id @default(uuid())
+  conversationId       String    @unique
+  userId               String
+  chatId               String
+  chatType             String    @default("PRIVATE") // "PRIVATE" | "GROUP"
+  conversationEpoch    Int       @default(1)
+  currentTopic         String?
+  activeTaskId         String?
+  lastReminderId       String?
+  lastEmailThreadIds   Json?
+  lastFileIds          Json?
+  lastImageIds         Json?
+  pendingClarification Json?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([chatId, userId])
+}
+
