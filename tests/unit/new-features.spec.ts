@@ -1,5 +1,8 @@
 import { MemorySaveTool, MemorySearchTool, MemoryDeleteTool } from '../../src/modules/tools/impl/memory.tools';
 import { WebSearchTool, FetchUrlTool } from '../../src/modules/tools/impl/web.tools';
+import { VietnameseMoneyParser, ExpenseRecordTool, ExpenseSummaryTool } from '../../src/modules/tools/impl/expense.tools';
+import { BookmarkSaveTool, BookmarkSearchTool } from '../../src/modules/tools/impl/bookmark.tools';
+import { VietQrTool, SystemStatusTool } from '../../src/modules/tools/impl/utility.tools';
 import { ReminderTimeParser } from '../../src/modules/scheduler/reminder-time-parser';
 import { ZaloEventNormalizer } from '../../src/modules/zalo/zalo-event.normalizer';
 
@@ -160,6 +163,103 @@ describe('New Personal Agent Features Suite', () => {
       expect(norm!.fileUrl).toBe('https://cdn.zalo.me/docs/hop-dong.pdf');
       expect(norm!.fileName).toBe('hop-dong.pdf');
       expect(norm!.attachments[0].type).toBe('FILE');
+    });
+  });
+
+  describe('5. Personal Finance & Expense Tracker (VietnameseMoneyParser & Tools)', () => {
+    it('parses natural Vietnamese currency shorthand accurately', () => {
+      expect(VietnameseMoneyParser.parseAmount('55k')).toBe(55_000);
+      expect(VietnameseMoneyParser.parseAmount('1tr2')).toBe(1_200_000);
+      expect(VietnameseMoneyParser.parseAmount('1.5 triệu')).toBe(1_500_000);
+      expect(VietnameseMoneyParser.parseAmount('25tr')).toBe(25_000_000);
+      expect(VietnameseMoneyParser.parseAmount('120 nghìn')).toBe(120_000);
+      expect(VietnameseMoneyParser.parseAmount(80000)).toBe(80_000);
+    });
+
+    it('records expenses and computes financial summary accurately', async () => {
+      const store: any[] = [];
+      const mockPrisma: any = {
+        memory: {
+          create: jest.fn(async ({ data }: any) => {
+            const rec = { id: `tx-${store.length + 1}`, ...data, createdAt: new Date() };
+            store.push(rec);
+            return rec;
+          }),
+          findMany: jest.fn(async () => store),
+        },
+      };
+      const mockFiles: any = { createExcel: jest.fn() };
+
+      const recordTool = new ExpenseRecordTool(mockPrisma);
+      const summaryTool = new ExpenseSummaryTool(mockPrisma, mockFiles);
+      const ctx = { ownerId: 'owner-1', chatId: 'chat-1', conversationId: 'conv-1', taskId: 'task-1' };
+
+      await recordTool.execute({ amount: '55k', category: 'an_uong', note: 'Ăn trưa phở bò' }, ctx);
+      await recordTool.execute({ amount: '80k', category: 'di_chuyen', note: 'Đổ xăng' }, ctx);
+      await recordTool.execute({ amount: '25tr', type: 'INCOME', category: 'thu_nhap', note: 'Lương tháng 11' }, ctx);
+
+      const summary = await summaryTool.execute({ period: 'month' }, ctx);
+      expect(summary.success).toBe(true);
+      expect(summary.totalExpense).toBe(135_000);
+      expect(summary.totalIncome).toBe(25_000_000);
+      expect(summary.netBalance).toBe(24_865_000);
+      expect(summary.byCategory.an_uong).toBe(55_000);
+      expect(summary.byCategory.di_chuyen).toBe(80_000);
+    });
+  });
+
+  describe('6. Second Brain Bookmarks, VietQR & System Monitor', () => {
+    it('saves and searches bookmarks by keyword and #tag', async () => {
+      const store: any[] = [];
+      const mockPrisma: any = {
+        memory: {
+          create: jest.fn(async ({ data }: any) => {
+            const rec = { id: `bm-${store.length + 1}`, ...data, createdAt: new Date() };
+            store.push(rec);
+            return rec;
+          }),
+          findMany: jest.fn(async () => store),
+        },
+      };
+
+      const saveBm = new BookmarkSaveTool(mockPrisma);
+      const searchBm = new BookmarkSearchTool(mockPrisma);
+      const ctx = { ownerId: 'owner-1', chatId: 'chat-1' };
+
+      await saveBm.execute(
+        {
+          url: 'https://docs.nestjs.com/techniques/queues',
+          title: 'Hướng dẫn BullMQ trên NestJS',
+          summary: 'Tối ưu hàng đợi Redis cho ứng dụng Node.js',
+          tags: ['nestjs', 'redis'],
+        },
+        ctx,
+      );
+
+      const found = await searchBm.execute({ query: 'bullmq', tag: 'nestjs' }, ctx);
+      expect(found.success).toBe(true);
+      expect(found.count).toBe(1);
+      expect(found.bookmarks[0].title).toContain('BullMQ');
+    });
+
+    it('generates VietQR payment URL and checks system status', async () => {
+      const mockZalo: any = { sendPhoto: jest.fn().mockResolvedValue({}) };
+      const qrTool = new VietQrTool(mockZalo);
+      const qrRes = await qrTool.execute(
+        { bankId: 'VCB', accountNo: '0123456789', amount: '150k', memo: 'Tien ca phe', accountName: 'TRAN VAN TRI' },
+        { ownerId: 'owner-1', chatId: 'chat-1' },
+      );
+
+      expect(qrRes.success).toBe(true);
+      expect(qrRes.amount).toBe(150_000);
+      expect(qrRes.qrUrl).toContain('https://img.vietqr.io/image/VCB-0123456789-compact2.png');
+      expect(mockZalo.sendPhoto).toHaveBeenCalledTimes(1);
+
+      const sysTool = new SystemStatusTool();
+      const sysRes = await sysTool.execute({}, { ownerId: 'owner-1', chatId: 'chat-1' });
+      expect(sysRes.success).toBe(true);
+      expect(sysRes.cpuCores).toBeGreaterThan(0);
+      expect(sysRes.ramTotalGb).toBeGreaterThan(0);
     });
   });
 });

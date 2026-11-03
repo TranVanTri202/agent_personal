@@ -371,7 +371,10 @@ export class AgentService {
             `• /files - Danh sách file đã tạo\n` +
             `• /memories - Xem danh sách bộ nhớ dài hạn về bạn\n` +
             `• /memory-del <id> - Xóa một ghi nhớ dài hạn theo ID\n` +
+            `• /expenses (hoặc /chitieu) - Xem thống kê thu chi tháng này\n` +
+            `• /bookmarks - Xem kho lưu trữ link & ghi chú (Second Brain)\n` +
             `• /briefing - Xem Bản tin sáng tổng hợp lịch trình & ghi nhớ\n` +
+            `• /evening (hoặc /tongket) - Xem Tổng kết cuối ngày\n` +
             `• /stickers - Danh sách nhóm sticker & số lượng ID\n` +
             `• /sticker <emotion> [count] - Test gửi sticker theo cảm xúc\n` +
             `• /sticker-reload - Nạp lại cấu hình stickers.json\n` +
@@ -806,7 +809,10 @@ export class AgentService {
 
       case '/memories':
         const memories = await this.prisma.memory.findMany({
-          where: { ownerId },
+          where: {
+            ownerId,
+            category: { notIn: ['finance_tx', 'bookmark_item'] },
+          },
           orderBy: [{ importance: 'desc' }, { updatedAt: 'desc' }],
           take: 25,
         });
@@ -853,6 +859,48 @@ export class AgentService {
       case '/briefing':
         const briefingMsg = await this.schedulerService.buildMorningBriefing(ownerId, chatId);
         await this.sendReply(chatId, briefingMsg);
+        return true;
+
+      case '/evening':
+      case '/tongket':
+        const eveningMsg = await this.schedulerService.buildEveningWrapup(ownerId, chatId);
+        await this.sendReply(chatId, eveningMsg);
+        return true;
+
+      case '/expenses':
+      case '/chitieu':
+        const expenseSummaryTool = this.toolRegistry.getTool('get_financial_summary');
+        if (expenseSummaryTool) {
+          const summaryRes = await expenseSummaryTool.execute(
+            { period: 'month', exportExcel: false },
+            { ownerId, chatId, conversationId },
+          );
+          await this.sendReply(chatId, summaryRes.message || 'Chưa có dữ liệu thu chi.');
+        }
+        return true;
+
+      case '/bookmarks':
+        const bookmarkTool = this.toolRegistry.getTool('search_bookmarks');
+        if (bookmarkTool) {
+          const bRes = await bookmarkTool.execute({}, { ownerId, chatId, conversationId });
+          if (!bRes.bookmarks || bRes.bookmarks.length === 0) {
+            await this.sendReply(
+              chatId,
+              '🔖 Kho Bookmark hiện đang trống. Anh/chị có thể gửi bất kỳ đường link bài viết nào và nhắn "Lưu lại link này giúp anh" nhé!',
+            );
+          } else {
+            const bLines = bRes.bookmarks.map(
+              (b: any, idx: number) =>
+                `${idx + 1}. **${b.title}** (${(b.tags || []).map((t: string) => `#${t}`).join(' ')})\n` +
+                (b.url ? `   🔗 ${b.url}\n` : '') +
+                `   📝 ${String(b.summary || '').slice(0, 140)}`,
+            );
+            await this.sendReply(
+              chatId,
+              `🔖 **KHO BOOKMARK / SECOND BRAIN (${bRes.count}):**\n\n${bLines.join('\n\n')}`,
+            );
+          }
+        }
         return true;
 
       default:
@@ -905,7 +953,10 @@ export class AgentService {
       let memoryContextBlock = '';
       try {
         const topMemories = await this.prisma.memory?.findMany({
-          where: { ownerId },
+          where: {
+            ownerId,
+            category: { notIn: ['finance_tx', 'bookmark_item'] },
+          },
           orderBy: [{ importance: 'desc' }, { updatedAt: 'desc' }],
           take: 10,
         });
@@ -917,7 +968,7 @@ export class AgentService {
         // Ignore if mock prisma in unit test doesn't stub memory.findMany
       }
 
-      const recentHistory = await this.conversationsService.getRecentMessages(conversationId, 10);
+      const recentHistory = await this.conversationsService.getRecentMessages(conversationId, 6);
       const messages: LLMMessage[] = [
         {
           role: 'system',
@@ -930,9 +981,17 @@ export class AgentService {
             `- Thân thiện, nhanh nhẹn, có nét hóm hỉnh/dí dỏm nhẹ nhàng khi trò chuyện thân mật hoặc đùa vui. Tuyệt đối nghiêm túc, điềm đạm, chính xác khi xử lý lỗi, bảo mật, gửi email hoặc báo cáo quan trọng.\n` +
             `- KHÔNG nịnh nọt thảo mai, KHÔNG ngụy tạo tiến độ hay kết quả công cụ (chỉ báo hoàn thành khi tool thực sự hoàn thành).\n` +
             `- Phong cách nhắn tin Zalo: Viết câu trả lời tự nhiên, cô đọng, súc tích như khi chat. Tuyệt đối KHÔNG chèn quá nhiều dòng trống (\\n\\n) thừa thãi giữa các câu. Các ý cần mạch lạc và ngắn gọn để đọc dễ dàng trên màn hình điện thoại.\n\n` +
-            `Quy tắc Bộ nhớ dài hạn (Long-term Memory):\n` +
-            `- Khi người dùng chia sẻ thông tin cá nhân quan trọng, sở thích, thói quen, dị ứng, liên hệ, công việc hoặc dặn "nhớ giúp anh...": Hãy chủ động gọi tool memory_save.\n` +
-            `- Khi cần tra cứu thông tin cá nhân đã lưu hoặc xóa ghi nhớ cũ: Gọi tool memory_search hoặc memory_delete.\n\n` +
+            `Quy tắc Bộ nhớ dài hạn & Kho Bookmark (Second Brain):\n` +
+            `- Khi người dùng chia sẻ thông tin cá nhân quan trọng, sở thích, thói quen, dị ứng, liên hệ, số tài khoản ngân hàng hoặc dặn "nhớ giúp anh...": Hãy chủ động gọi tool memory_save.\n` +
+            `- Khi cần tra cứu thông tin cá nhân đã lưu hoặc xóa ghi nhớ cũ: Gọi tool memory_search hoặc memory_delete.\n` +
+            `- Khi người dùng muốn lưu một đường link bài viết, tài liệu hoặc ghi chú để đọc sau ("lưu lại link này", "bookmark bài này"): Gọi tool save_bookmark. Khi muốn tìm lại link đã lưu: Gọi tool search_bookmarks.\n\n` +
+            `Quy tắc Quản lý Chi tiêu & Tài chính Cá nhân (Expense Tracker & VietQR):\n` +
+            `- Khi người dùng nhắn một khoản chi tiêu hoặc thu nhập (ví dụ: "ăn trưa 55k", "đổ xăng 80k", "đóng tiền điện 1tr2", "nhận lương 25tr") hoặc gửi ảnh chụp hóa đơn/bill chuyển khoản và nhờ lưu chi tiêu: BẮT BUỘC gọi tool record_transaction.\n` +
+            `- Khi người dùng hỏi thống kê thu chi hôm nay/tuần này/tháng này hoặc muốn xuất file Excel chi tiêu: BẮT BUỘC gọi tool get_financial_summary.\n` +
+            `- Khi người dùng yêu cầu tạo mã QR chuyển khoản ngân hàng (ví dụ: "tạo mã QR chuyển khoản 150k Vietcombank 0123456789"): Gọi tool generate_vietqr.\n\n` +
+            `Quy tắc Lịch Google Calendar & Hệ thống (Google Calendar & System Monitor):\n` +
+            `- Khi người dùng hỏi lịch họp hoặc tạo sự kiện trên Google Calendar: Gọi tool calendar_list_events hoặc calendar_create_event.\n` +
+            `- Khi người dùng hỏi tình trạng RAM/CPU/Uptime của máy tính/server đang chạy bot: Gọi tool system_status.\n\n` +
             `Quy tắc Tìm kiếm Web & Đọc Link (Web Search & Fetch URL):\n` +
             `- Khi người dùng hỏi thông tin thời sự, giá vàng, tỷ giá, thời tiết, tin tức mới nhất hoặc sự kiện thực tế: BẮT BUỘC gọi tool web_search để lấy thông tin mới nhất.\n` +
             `- Khi người dùng gửi một đường link URL (http/https) và yêu cầu đọc, tóm tắt hoặc phân tích nội dung trang web đó: BẮT BUỘC gọi tool fetch_url.\n\n` +
@@ -969,7 +1028,11 @@ export class AgentService {
         });
       }
 
-      const toolsSchema = this.toolRegistry.getOpenAIToolsSchema();
+      const combinedContextForTools = `${userPrompt} ${injectedContextPrompt || ''}`;
+      const toolsSchema = this.toolRegistry.getOpenAIToolsSchema(combinedContextForTools);
+      this.logger.log(
+        `[TOKEN_OPTIMIZER] Selected ${toolsSchema.length}/${this.toolRegistry.listTools().length} relevant tools for current turn.`,
+      );
       let steps = 0;
       let finalAnswer = '';
       const fileLinkNotices: string[] = [];

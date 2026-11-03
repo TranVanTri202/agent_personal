@@ -42,6 +42,7 @@ export class GmailService {
       'https://www.googleapis.com/auth/gmail.readonly',
       'https://www.googleapis.com/auth/gmail.compose',
       'https://www.googleapis.com/auth/gmail.modify',
+      'https://www.googleapis.com/auth/calendar.events',
     ];
 
     const state = this.encryption.encrypt(JSON.stringify({ ownerId, timestamp: Date.now() }));
@@ -217,6 +218,100 @@ export class GmailService {
     return {
       messageId: res.data.id,
       threadId: res.data.threadId,
+    };
+  }
+
+  /**
+   * Lists upcoming Google Calendar events for the connected Google account.
+   */
+  async listCalendarEvents(
+    ownerId: string,
+    timeMinIso?: string,
+    timeMaxIso?: string,
+    maxResults = 10,
+  ): Promise<any[]> {
+    const account = await this.getConnectedAccount(ownerId);
+    if (!account) {
+      throw new Error('Chưa kết nối tài khoản Google. Vui lòng nhắn /mail connect để cấp quyền Google & Calendar.');
+    }
+
+    const tokens = JSON.parse(this.encryption.decrypt(account.encryptedTokens));
+    const oauth2Client = this.getOAuth2Client();
+    oauth2Client.setCredentials(tokens);
+
+    const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+    const res = await calendar.events.list({
+      calendarId: 'primary',
+      timeMin: timeMinIso || new Date().toISOString(),
+      ...(timeMaxIso ? { timeMax: timeMaxIso } : {}),
+      maxResults,
+      singleEvents: true,
+      orderBy: 'startTime',
+    });
+
+    return (res.data.items || []).map((ev) => ({
+      id: ev.id,
+      summary: ev.summary || '(Sự kiện không tên)',
+      description: ev.description,
+      location: ev.location,
+      start: ev.start?.dateTime || ev.start?.date,
+      end: ev.end?.dateTime || ev.end?.date,
+      htmlLink: ev.htmlLink,
+      hangoutLink: ev.hangoutLink,
+    }));
+  }
+
+  /**
+   * Creates a new event on the owner's primary Google Calendar.
+   */
+  async createCalendarEvent(
+    ownerId: string,
+    params: {
+      summary: string;
+      description?: string;
+      location?: string;
+      startIso: string;
+      endIso?: string;
+    },
+  ): Promise<any> {
+    const account = await this.getConnectedAccount(ownerId);
+    if (!account) {
+      throw new Error('Chưa kết nối tài khoản Google. Vui lòng nhắn /mail connect để cấp quyền Google & Calendar.');
+    }
+
+    const tokens = JSON.parse(this.encryption.decrypt(account.encryptedTokens));
+    const oauth2Client = this.getOAuth2Client();
+    oauth2Client.setCredentials(tokens);
+
+    const startDate = new Date(params.startIso);
+    const endDate = params.endIso
+      ? new Date(params.endIso)
+      : new Date(startDate.getTime() + 60 * 60 * 1000); // default 1 hour duration
+
+    const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+    const res = await calendar.events.insert({
+      calendarId: 'primary',
+      requestBody: {
+        summary: params.summary,
+        description: params.description,
+        location: params.location,
+        start: {
+          dateTime: startDate.toISOString(),
+          timeZone: 'Asia/Ho_Chi_Minh',
+        },
+        end: {
+          dateTime: endDate.toISOString(),
+          timeZone: 'Asia/Ho_Chi_Minh',
+        },
+      },
+    });
+
+    return {
+      id: res.data.id,
+      summary: res.data.summary,
+      start: res.data.start?.dateTime,
+      end: res.data.end?.dateTime,
+      htmlLink: res.data.htmlLink,
     };
   }
 }

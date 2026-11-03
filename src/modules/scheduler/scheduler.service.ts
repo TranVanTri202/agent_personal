@@ -25,6 +25,9 @@ export interface ReminderHealthStatus {
 @Injectable()
 export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private reconciliationTimer: NodeJS.Timeout | null = null;
+  private proactiveDigestTimer: NodeJS.Timeout | null = null;
+  private lastMorningDigestDate = '';
+  private lastEveningDigestDate = '';
 
   constructor(
     @InjectQueue(REMINDER_QUEUE_NAME) private readonly reminderQueue: Queue<ReminderJobData>,
@@ -51,12 +54,25 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(`[SCHEDULER_PERIODIC_RECONCILE_ERROR] ${err.message}`);
       });
     }, 3 * 60 * 1000);
+
+    // Proactive Daily Digest (Morning 07:30 & Evening 21:30 Asia/Ho_Chi_Minh)
+    if (process.env.NODE_ENV !== 'test') {
+      this.proactiveDigestTimer = setInterval(() => {
+        this.checkProactiveDailyDigest().catch((err) => {
+          this.logger.warn(`[SCHEDULER_DIGEST_ERROR] ${err.message}`);
+        });
+      }, 60 * 1000);
+    }
   }
 
   onModuleDestroy() {
     if (this.reconciliationTimer) {
       clearInterval(this.reconciliationTimer);
       this.reconciliationTimer = null;
+    }
+    if (this.proactiveDigestTimer) {
+      clearInterval(this.proactiveDigestTimer);
+      this.proactiveDigestTimer = null;
     }
   }
 
@@ -508,7 +524,10 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     });
 
     const memories = await this.prisma.memory.findMany({
-      where: { ownerId },
+      where: {
+        ownerId,
+        category: { notIn: ['finance_tx', 'bookmark_item'] },
+      },
       orderBy: [{ importance: 'desc' }, { updatedAt: 'desc' }],
       take: 5,
     });
@@ -538,5 +557,134 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
     briefing += `\n💡 Anh/chị cần em lên lịch nhắc việc mới, kiểm tra email hay tra cứu thông tin gì hôm nay cứ nhắn em nhé!`;
     return briefing;
+  }
+
+  /**
+   * Generates an Evening Wrap-up summarizing today's expenses, completed reminders, and tomorrow's schedule.
+   */
+  async buildEveningWrapup(ownerId: string, chatId?: string): Promise<string> {
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('vi-VN', {
+      weekday: 'long',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      timeZone: 'Asia/Ho_Chi_Minh',
+    });
+
+    const startOfToday = new Date(now);
+    startOfToday.setHours(0, 0, 0, 0);
+
+    // 1. Today's expenses
+    const todayTx = await this.prisma.memory.findMany({
+      where: {
+        ownerId,
+        category: 'finance_tx',
+        createdAt: { gte: startOfToday },
+      },
+    });
+
+    let todayExpense = 0;
+    let todayIncome = 0;
+    let txCount = 0;
+    for (const r of todayTx) {
+      try {
+        const parsed = JSON.parse(r.text);
+        txCount++;
+        if (parsed.type === 'INCOME') todayIncome += Number(parsed.amount || 0);
+        else todayExpense += Number(parsed.amount || 0);
+      } catch {
+        // ignore
+      }
+    }
+
+    // 2. Tomorrow's scheduled reminders
+    const endOfTomorrow = new Date(now.getTime() + 24 * 3600 * 1000);
+    const upcomingReminders = await this.prisma.reminder.findMany({
+      where: {
+        ownerId,
+        status: 'SCHEDULED',
+        dueAt: { gte: now, lte: endOfTomorrow },
+        ...(chatId ? { recipientChatId: chatId } : {}),
+      },
+      orderBy: { dueAt: 'asc' },
+      take: 10,
+    });
+
+    let msg = `🌙 **TỔNG KẾT CUỐI NGÀY (${dateStr})**\nHôm nay anh/chị đã vất vả rồi! Cùng em điểm lại một chút nhé:\n\n`;
+
+    msg += `💰 **Chi tiêu hôm nay (${txCount} giao dịch):**\n`;
+    msg += `• Tổng chi: **${Math.round(todayExpense).toLocaleString('vi-VN')} ₫**\n`;
+    if (todayIncome > 0) {
+      msg += `• Tổng thu: **+${Math.round(todayIncome).toLocaleString('vi-VN')} ₫**\n`;
+    }
+
+    if (upcomingReminders.length === 0) {
+      msg += `\n⏰ **Lịch trình sáng/ngày mai:**\n• Chưa có lời nhắc nào sắp tới.\n`;
+    } else {
+      const rLines = upcomingReminders.map((r, i) => {
+        const t = r.dueAt.toLocaleTimeString('vi-VN', {
+          hour: '2-digit',
+          minute: '2-digit',
+          timeZone: 'Asia/Ho_Chi_Minh',
+        });
+        return `${i + 1}. **${t}** - ${r.title}`;
+      });
+      msg += `\n⏰ **Lịch nhắc việc sắp tới (${upcomingReminders.length}):**\n${rLines.join('\n')}\n`;
+    }
+
+    msg += `\nChúc anh/chị buổi tối thư giãn và ngủ ngon nhé! 💤`;
+    return msg;
+  }
+
+  /**
+   * Checks if it is 07:30 (Morning Briefing) or 21:30 (Evening Wrap-up) in Asia/Ho_Chi_Minh
+   * and proactively sends the digest to the paired owner.
+   */
+  async checkProactiveDailyDigest(): Promise<void> {
+    const now = new Date();
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Ho_Chi_Minh',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(now);
+
+    const getPart = (type: string) => parts.find((p) => p.type === type)?.value || '';
+    const dateKey = `${getPart('year')}-${getPart('month')}-${getPart('day')}`;
+    const hour = parseInt(getPart('hour'), 10);
+    const minute = parseInt(getPart('minute'), 10);
+
+    const isMorningSlot = hour === 7 && minute === 30 && this.lastMorningDigestDate !== dateKey;
+    const isEveningSlot = hour === 21 && minute === 30 && this.lastEveningDigestDate !== dateKey;
+
+    if (!isMorningSlot && !isEveningSlot) return;
+
+    const owner = await this.prisma.user.findFirst({
+      where: { role: 'OWNER' },
+    });
+    if (!owner) return;
+
+    const privConv = await this.prisma.conversation.findFirst({
+      where: { ownerId: owner.id, type: 'PRIVATE' },
+      orderBy: { updatedAt: 'desc' },
+    });
+    const targetChatId = privConv?.externalChatId || owner.zaloUserId;
+    if (!targetChatId) return;
+
+    if (isMorningSlot) {
+      this.lastMorningDigestDate = dateKey;
+      const briefing = await this.buildMorningBriefing(owner.id, targetChatId);
+      await this.zaloClient.sendMessage(targetChatId, briefing);
+      this.logger.log(`[PROACTIVE_DIGEST] Sent 07:30 Morning Briefing to ${targetChatId}`);
+    } else if (isEveningSlot) {
+      this.lastEveningDigestDate = dateKey;
+      const wrapup = await this.buildEveningWrapup(owner.id, targetChatId);
+      await this.zaloClient.sendMessage(targetChatId, wrapup);
+      this.logger.log(`[PROACTIVE_DIGEST] Sent 21:30 Evening Wrap-up to ${targetChatId}`);
+    }
   }
 }

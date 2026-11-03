@@ -3,6 +3,10 @@ import { ToolRegistry } from './tool.registry';
 import { CreateExcelTool, CreatePdfTool, CreateWordTool, ReadDocumentTool } from './impl/document.tools';
 import { MemorySaveTool, MemorySearchTool, MemoryDeleteTool } from './impl/memory.tools';
 import { WebSearchTool, FetchUrlTool } from './impl/web.tools';
+import { ExpenseRecordTool, ExpenseSummaryTool } from './impl/expense.tools';
+import { BookmarkSaveTool, BookmarkSearchTool } from './impl/bookmark.tools';
+import { CalendarListEventsTool, CalendarCreateEventTool } from './impl/calendar.tools';
+import { VietQrTool, SystemStatusTool } from './impl/utility.tools';
 import {
   CreateReminderTool,
   ListRemindersTool,
@@ -30,6 +34,14 @@ import { ImageGenerationModule } from '../image-generation/image-generation.modu
     MemoryDeleteTool,
     WebSearchTool,
     FetchUrlTool,
+    ExpenseRecordTool,
+    ExpenseSummaryTool,
+    BookmarkSaveTool,
+    BookmarkSearchTool,
+    CalendarListEventsTool,
+    CalendarCreateEventTool,
+    VietQrTool,
+    SystemStatusTool,
     CreateReminderTool,
     ListRemindersTool,
     GetReminderTool,

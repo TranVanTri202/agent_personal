@@ -89,7 +89,10 @@ npm run dev
 | `/files` | Xem danh sách các file đã tạo |
 | `/memories` | Xem danh sách bộ nhớ dài hạn về chủ sở hữu |
 | `/memory-del <id>` | Xóa một ghi nhớ dài hạn theo mã ID |
+| `/expenses`, `/chitieu` | Xem thống kê thu chi cá nhân trong tháng |
+| `/bookmarks` | Xem kho lưu trữ link & ghi chú (Second Brain) |
 | `/briefing` | Xem Bản tin sáng tổng hợp lịch nhắc việc trong ngày & ghi nhớ quan trọng |
+| `/evening`, `/tongket` | Xem Tổng kết cuối ngày (chi tiêu hôm nay & lịch trình ngày mai) |
 | `/sticker-add <nhóm>` | Mở phiên thu thập sticker mới cho nhóm cảm xúc (VD: `/sticker-add sorry`) |
 | `/sticker-done` | Kết thúc phiên thu thập và lưu vào PostgreSQL & stickers.json |
 | `/sticker-status` | Xem số lượng sticker đã nhận trong phiên hiện tại |
