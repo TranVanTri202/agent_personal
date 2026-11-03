@@ -50,7 +50,13 @@ export class ZaloChannelAdapter implements IZaloChannel {
   async sendPhoto(chatId: string, photoUrl: string, caption?: string): Promise<any> {
     try {
       // NOTE: zalo-bot-js method signature is sendPhoto(chatId, caption, photo, options)
-      return await this.bot.sendPhoto(chatId, caption || '', photoUrl);
+      const res = await this.bot.sendPhoto(chatId, caption || '', photoUrl);
+      if (res && typeof res.messageId === 'string' && res.messageId.startsWith('local-') && !res.raw) {
+        this.logger.warn(
+          `[ZALO_SEND_PHOTO_REJECTED] Zalo API returned ok:false for photoUrl in chat ${chatId}. Check image format/URL.`,
+        );
+      }
+      return res;
     } catch (err: any) {
       this.logSanitizedError('sendPhoto', err, { chatId, photoUrl });
       throw err;

@@ -1149,7 +1149,7 @@ export class AgentService {
               if (output?.fileId) {
                 await this.conversationStateService.recordFile(conversationId, output.fileId);
               }
-            } else if (['generate_image', 'edit_image'].includes(call.name)) {
+            } else if (['generate_image', 'edit_image', 'generate_vietqr'].includes(call.name)) {
               const imgId = output?.fileId || output?.imageId;
               if (imgId) {
                 await this.conversationStateService.recordImage(conversationId, imgId);
