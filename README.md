@@ -14,11 +14,14 @@ Hệ thống **Personal AI Agent** điều khiển bằng tiếng Việt qua **Z
     2. **`task` mode**: Định tuyến tối ưu theo 13 danh mục tác vụ qua `config/llm-routing.json` (hỗ trợ `rules` và `adaptive`).
   - Chỉ cần 1 `OPENROUTER_API_KEY` truy cập hàng trăm model (Claude 3.5 Sonnet/Haiku, GPT-4o/mini, Gemini 1.5/2.5, DeepSeek V3/R1).
   - Tự động ghi nhận chi phí USD, tokens và độ trễ vào bảng `LLMUsageLog`. Giới hạn ngân sách hàng ngày `LLM_DAILY_BUDGET_USD`.
-- 📊 **Tạo tài liệu tự động**: Tự sinh file Excel (.xlsx), PDF (.pdf), Word (.docx) từ yêu cầu bằng ngôn ngữ tự nhiên.
+- 📊 **Tạo & Đọc tài liệu tự động**: Tự sinh file Excel (.xlsx), PDF (.pdf), Word (.docx) từ yêu cầu bằng ngôn ngữ tự nhiên; đồng thời hỗ trợ **đọc & phân tích file đính kèm** (`.xlsx`, `.docx`, `.pdf`, `.csv`, `.txt`) khi người dùng gửi trực tiếp vào Zalo (`read_uploaded_document`).
+- 🌐 **Tìm kiếm Web & Đọc nội dung Link (`web_search` & `fetch_url`)**: Tra cứu thông tin thời gian thực (giá vàng, tỷ giá, tin tức, thời tiết) qua Tavily / DuckDuckGo / OpenRouter Online và đọc/tóm tắt nội dung bất kỳ đường link bài báo nào gửi vào chat (có bảo vệ chống SSRF).
+- 🧠 **Bộ nhớ dài hạn thông minh (Long-term Memory)**: Tự động nạp các ghi nhớ quan trọng của chủ sở hữu vào ngữ cảnh hội thoại, tìm kiếm đa từ khóa (`memory_save`, `memory_search`, `memory_delete`) và quản lý qua lệnh `/memories`.
+- 🎙️ **Xử lý tin nhắn thoại (Voice Message STT)**: Tự động chuyển đổi ghi âm giọng nói tiếng Việt trên Zalo thành văn bản và thực thi lệnh ngay lập tức.
 - 💾 **Supabase Temporary Storage (24-Hour TTL)**: Lưu trữ file tạm (Excel, PDF, Word, ảnh AI) trong private bucket Supabase Storage (`agent-temp`). Từng file tự động xóa sau đúng **24 giờ** tính từ thời điểm upload thành công nhờ kiến trúc 2 lớp (BullMQ delayed job + Recovery Sweeper). Sinh HTTPS signed download URL an toàn, không mở public bucket.
 - 📧 **Gmail Agent**: Kết nối Google OAuth2, mã hóa token AES-256-GCM, đọc/tóm tắt hộp thư, tạo bản nháp và gửi email an toàn.
 - 🛡️ **Human-in-the-loop Approvals**: Mọi hành động rủi ro cao (gửi email thật, xóa file) đều bắt buộc yêu cầu chủ sở hữu duyệt qua mã `/approve <mã>`.
-- ⏰ **Nhắc việc thông minh**: Lên lịch nhắc nhở theo múi giờ `Asia/Ho_Chi_Minh` bằng hàng đợi BullMQ delayed jobs và tự động gửi thông báo vào Zalo.
+- ⏰ **Nhắc việc thông minh & Định kỳ (Recurring Reminders + Morning Briefing)**: Lên lịch nhắc nhở 1 lần hoặc lặp lại (`DAILY`, `WEEKLY`, `WEEKDAYS`, `MONTHLY`) theo múi giờ `Asia/Ho_Chi_Minh` và tổng hợp Bản tin sáng (`/briefing`).
 
 ---
 
@@ -53,15 +56,11 @@ npm run llm:smoke
 ```
 
 ### 5. Khởi chạy hệ thống
-Mở 2 cửa sổ terminal:
-- **Terminal A (API Server)**:
-  ```bash
-  npm run dev
-  ```
-- **Terminal B (Worker & Zalo Poller)**:
-  ```bash
-  npm run dev:worker
-  ```
+Chạy toàn bộ hệ thống (HTTP Server + Zalo Long Polling + BullMQ Workers) chỉ với 1 tiến trình duy nhất:
+```bash
+npm run dev
+```
+*(Tùy chọn: Nếu muốn chạy thêm tiến trình Worker chuyên biệt ở terminal thứ 2 bằng `npm run dev:worker`, hệ thống sẽ tự động tắt Zalo Polling ở Worker để tránh xung đột `getUpdates`).*
 
 ### 6. Ghép nối với tài khoản Zalo của bạn
 1. Trong terminal, chạy:
@@ -88,6 +87,9 @@ Mở 2 cửa sổ terminal:
 | `/approve <code>` | Phê duyệt thực thi thao tác (gửi email, xóa dữ liệu) |
 | `/deny <code>` | Từ chối hủy bỏ thao tác |
 | `/files` | Xem danh sách các file đã tạo |
+| `/memories` | Xem danh sách bộ nhớ dài hạn về chủ sở hữu |
+| `/memory-del <id>` | Xóa một ghi nhớ dài hạn theo mã ID |
+| `/briefing` | Xem Bản tin sáng tổng hợp lịch nhắc việc trong ngày & ghi nhớ quan trọng |
 | `/sticker-add <nhóm>` | Mở phiên thu thập sticker mới cho nhóm cảm xúc (VD: `/sticker-add sorry`) |
 | `/sticker-done` | Kết thúc phiên thu thập và lưu vào PostgreSQL & stickers.json |
 | `/sticker-status` | Xem số lượng sticker đã nhận trong phiên hiện tại |

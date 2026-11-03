@@ -1,7 +1,8 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { AgentTool } from './tool.interface';
-import { CreateExcelTool, CreatePdfTool, CreateWordTool } from './impl/document.tools';
-import { MemorySaveTool, MemorySearchTool } from './impl/memory.tools';
+import { CreateExcelTool, CreatePdfTool, CreateWordTool, ReadDocumentTool } from './impl/document.tools';
+import { MemorySaveTool, MemorySearchTool, MemoryDeleteTool } from './impl/memory.tools';
+import { WebSearchTool, FetchUrlTool } from './impl/web.tools';
 import {
   CreateReminderTool,
   ListRemindersTool,
@@ -25,8 +26,12 @@ export class ToolRegistry implements OnModuleInit {
     private readonly createExcelTool: CreateExcelTool,
     private readonly createPdfTool: CreatePdfTool,
     private readonly createWordTool: CreateWordTool,
+    private readonly readDocumentTool: ReadDocumentTool,
     private readonly memorySaveTool: MemorySaveTool,
     private readonly memorySearchTool: MemorySearchTool,
+    private readonly memoryDeleteTool: MemoryDeleteTool,
+    private readonly webSearchTool: WebSearchTool,
+    private readonly fetchUrlTool: FetchUrlTool,
     private readonly createReminderTool: CreateReminderTool,
     private readonly listRemindersTool: ListRemindersTool,
     private readonly getReminderTool: GetReminderTool,
@@ -47,8 +52,12 @@ export class ToolRegistry implements OnModuleInit {
     this.register(this.createExcelTool);
     this.register(this.createPdfTool);
     this.register(this.createWordTool);
+    this.register(this.readDocumentTool);
     this.register(this.memorySaveTool);
     this.register(this.memorySearchTool);
+    this.register(this.memoryDeleteTool);
+    this.register(this.webSearchTool);
+    this.register(this.fetchUrlTool);
     this.register(this.createReminderTool);
     this.register(this.listRemindersTool);
     this.register(this.getReminderTool);

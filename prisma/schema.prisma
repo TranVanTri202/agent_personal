@@ -85,7 +85,6 @@ model User {
   storedFiles     StoredFile[]
   memories        Memory[]
   emailAccounts   EmailAccount[]
-  scheduledTasks  ScheduledTask[]
   reminders       Reminder[]
   pairingTokens   PairingToken[]
 
@@ -172,7 +171,6 @@ model AgentTask {
   owner          User?            @relation(fields: [ownerId], references: [id], onDelete: SetNull)
   conversation   Conversation?    @relation(fields: [conversationId], references: [id], onDelete: SetNull)
   steps          TaskStep[]
-  toolExecutions ToolExecution[]
   approvals      Approval[]
   storedFiles    StoredFile[]
 
@@ -195,24 +193,6 @@ model TaskStep {
   task               AgentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
   @@index([taskId, sequence])
-}
-
-model ToolExecution {
-  id                String    @id @default(uuid())
-  taskId            String
-  toolCallId        String    @unique
-  toolName          String
-  status            String
-  redactedInputJson Json?
-  redactedOutputJson Json?
-  timingsMs         Int?
-  error             String?   @db.Text
-  createdAt         DateTime  @default(now())
-
-  task              AgentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
-
-  @@index([taskId])
-  @@index([toolCallId])
 }
 
 model Approval {
@@ -328,63 +308,6 @@ model EmailMessageIndex {
 
   @@index([accountId, threadId])
   @@index([accountId, receivedAt])
-}
-
-model ScheduledTask {
-  id             String   @id @default(uuid())
-  ownerId        String
-  name           String
-  timezone       String   @default("Asia/Ho_Chi_Minh")
-  scheduleType   String   // "ONCE" | "CRON"
-  cronExpression String?
-  runAt          DateTime?
-  payloadJson    Json
-  enabled        Boolean  @default(true)
-  nextRunAt      DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  owner          User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-
-  @@index([ownerId])
-  @@index([enabled, nextRunAt])
-}
-
-model Skill {
-  id              String   @id @default(uuid())
-  name            String   @unique
-  version         String   @default("1.0.0")
-  description     String   @db.Text
-  schemaJson      Json
-  workflowJson    Json
-  permissionsJson Json
-  enabled         Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  @@index([name])
-}
-
-model AuditLog {
-  id                   String   @id @default(uuid())
-  actorId              String?
-  taskId               String?
-  action               String
-  target               String?
-  sanitizedDetailsJson Json?
-  occurredAt           DateTime @default(now())
-
-  @@index([actorId])
-  @@index([taskId])
-  @@index([action])
-  @@index([occurredAt])
-}
-
-model SystemSetting {
-  key         String   @id
-  value       String   @db.Text
-  description String?
-  updatedAt   DateTime @updatedAt
 }
 
 model LLMUsageLog {

@@ -1,6 +1,8 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Job } from 'bullmq';
+import { Optional } from '@nestjs/common';
+import { Processor, WorkerHost, InjectQueue } from '@nestjs/bullmq';
+import { Job, Queue } from 'bullmq';
 import { REMINDER_QUEUE_NAME, ReminderJobData } from './scheduler.service';
+import { ReminderTimeParser } from './reminder-time-parser';
 import { ZaloApiClient } from '../zalo/zalo-api.client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../../common/logger/pino-logger.service';
@@ -11,6 +13,7 @@ export class ReminderProcessor extends WorkerHost {
     private readonly zaloClient: ZaloApiClient,
     private readonly prisma: PrismaService,
     private readonly logger: AppLoggerService,
+    @Optional() @InjectQueue(REMINDER_QUEUE_NAME) private readonly reminderQueue?: Queue<ReminderJobData>,
   ) {
     super();
   }
@@ -70,21 +73,53 @@ export class ReminderProcessor extends WorkerHost {
         message = `⏰ Anh/chị ơi, đến giờ **${reminder.title}** rồi ạ! Chiến thôi anh/chị 😄`;
       }
 
-      if (reminder.note) {
-        message += `\n📝 Ghi chú: ${reminder.note}`;
+      const { recurrence, cleanNote } = ReminderTimeParser.extractRecurrenceFromNote(reminder.note);
+      if (cleanNote) {
+        message += `\n📝 Ghi chú: ${cleanNote}`;
       }
 
       this.logger.log(`[REMINDER_SENDING] Dispatching notification to Zalo chat ${reminder.recipientChatId}...`);
       await this.zaloClient.sendMessage(reminder.recipientChatId, message);
 
-      // Mark SENT in DB
-      await this.prisma.reminder.update({
-        where: { id: reminderId },
-        data: {
-          status: 'SENT',
-          sentAt: new Date(),
-        },
-      });
+      const nextDueAt = ReminderTimeParser.computeNextDueAt(reminder.dueAt, recurrence);
+      if (nextDueAt) {
+        const nextRev = reminder.revision + 1;
+        await this.prisma.reminder.update({
+          where: { id: reminderId },
+          data: {
+            status: 'SCHEDULED',
+            dueAt: nextDueAt,
+            revision: nextRev,
+            sentAt: new Date(),
+          },
+        });
+        const nextDelay = Math.max(0, nextDueAt.getTime() - Date.now());
+        if (this.reminderQueue) {
+          await this.reminderQueue.add(
+            'deliver-reminder',
+            { reminderId: reminder.id, revision: nextRev },
+            {
+              jobId: `reminder-${reminder.id}-${nextRev}`,
+              delay: nextDelay,
+              attempts: 3,
+              backoff: { type: 'exponential', delay: 3000 },
+              removeOnComplete: true,
+            },
+          );
+        }
+        this.logger.log(
+          `[REMINDER_RECURRING] Scheduled next occurrence (${recurrence}) for #${reminderId} at ${nextDueAt.toISOString()}`,
+        );
+      } else {
+        // Mark SENT in DB
+        await this.prisma.reminder.update({
+          where: { id: reminderId },
+          data: {
+            status: 'SENT',
+            sentAt: new Date(),
+          },
+        });
+      }
 
       this.logger.log(`[REMINDER_SENT] Successfully delivered reminder #${reminderId} to ${reminder.recipientChatId}`);
       return { success: true };

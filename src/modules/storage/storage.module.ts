@@ -1,7 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { LocalStorageProvider } from './local-storage.provider';
-import { R2StorageProvider } from './r2-storage.provider';
 import { SupabaseStorageClient } from './supabase-storage.client';
 import { TemporaryStorageService } from './temporary-storage.service';
 import { TemporaryFileCleanupProcessor } from './temporary-file-cleanup.processor';
@@ -18,7 +17,6 @@ import { TEMPORARY_FILES_QUEUE_NAME } from './temporary-storage.types';
   ],
   providers: [
     LocalStorageProvider,
-    R2StorageProvider,
     SupabaseStorageClient,
     TemporaryStorageService,
     TemporaryFileCleanupProcessor,
@@ -30,7 +28,6 @@ import { TEMPORARY_FILES_QUEUE_NAME } from './temporary-storage.types';
     TemporaryStorageService,
     SupabaseStorageClient,
     LocalStorageProvider,
-    R2StorageProvider,
   ],
 })
 export class StorageModule {}

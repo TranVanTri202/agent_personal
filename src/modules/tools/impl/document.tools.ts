@@ -132,3 +132,47 @@ export class CreateWordTool implements AgentTool {
     };
   }
 }
+
+@Injectable()
+export class ReadDocumentTool implements AgentTool {
+  name = 'read_uploaded_document';
+  description =
+    'Đọc và trích xuất toàn bộ nội dung văn bản hoặc bảng biểu từ file tài liệu (.xlsx, .docx, .pdf, .csv, .txt, .json) mà người dùng đã gửi vào Zalo hoặc đang lưu trong hệ thống để phân tích, tóm tắt hoặc trả lời câu hỏi.';
+  riskLevel: 'LOW' = 'LOW';
+  inputSchema = {
+    type: 'object',
+    properties: {
+      fileId: {
+        type: 'string',
+        description: 'ID của file trong hệ thống (tùy chọn, nếu để trống sẽ tự động lấy file tài liệu gần nhất)',
+      },
+      fileUrl: {
+        type: 'string',
+        description: 'URL trực tiếp của file nếu có (tùy chọn)',
+      },
+      maxChars: {
+        type: 'number',
+        description: 'Số ký tự tối đa cần đọc (mặc định 12000)',
+      },
+    },
+  };
+
+  constructor(private readonly filesService: FilesService) {}
+
+  requiresApproval(): boolean {
+    return false;
+  }
+
+  async execute(
+    input: { fileId?: string; fileUrl?: string; maxChars?: number },
+    context: ToolExecutionContext,
+  ): Promise<any> {
+    return this.filesService.extractDocumentContent({
+      fileId: input.fileId,
+      fileUrl: input.fileUrl,
+      ownerId: context.ownerId,
+      conversationId: context.conversationId,
+      maxChars: input.maxChars,
+    });
+  }
+}

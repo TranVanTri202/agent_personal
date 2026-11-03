@@ -13,6 +13,7 @@ import { OpenRouterModelCatalogService } from '../llm/openrouter/openrouter.cata
 import { LLMMessage } from '../llm/llm.interface';
 import { ApprovalsService } from '../approvals/approvals.service';
 import { StorageService } from '../storage/storage.service';
+import { FilesService } from '../files/files.service';
 import { SchedulerService } from '../scheduler/scheduler.service';
 import { GmailService } from '../gmail/gmail.service';
 import { StickerService } from '../stickers/sticker.service';
@@ -43,6 +44,7 @@ export class AgentService {
     private readonly catalogService: OpenRouterModelCatalogService,
     private readonly approvalsService: ApprovalsService,
     private readonly storageService: StorageService,
+    private readonly filesService: FilesService,
     private readonly schedulerService: SchedulerService,
     private readonly gmailService: GmailService,
     private readonly stickerService: StickerService,
@@ -84,7 +86,7 @@ export class AgentService {
     });
 
     // Check pairing command first
-    const text = (msg.text || msg.caption || '').trim();
+    let text = (msg.text || msg.caption || '').trim();
     if (text.startsWith('/pair')) {
       const parts = text.split(/\s+/);
       const code = parts[1] || '';
@@ -145,13 +147,43 @@ export class AgentService {
       ownerId,
     );
 
+    // Handle incoming VOICE message (Speech-to-Text)
+    const voiceAttachment = msg.attachments?.find((att) => att.type === 'VOICE' && att.sourceUrl);
+    const voiceUrl = msg.voiceUrl || voiceAttachment?.sourceUrl;
+    if (msg.type === 'VOICE' || voiceUrl) {
+      if (!voiceUrl) {
+        await this.sendReply(msg.chatId, 'Dạ em nhận được tin nhắn thoại nhưng không tìm thấy đường dẫn file âm thanh ạ.');
+        return;
+      }
+      await this.zaloClient.sendChatAction(msg.chatId, 'typing').catch(() => {});
+      const sttRes = await this.llmService.transcribeAudio(voiceUrl);
+      if (!sttRes.success || !sttRes.text) {
+        await this.sendReply(
+          msg.chatId,
+          `Dạ em chưa nghe rõ hoặc chưa thể chuyển đổi tin nhắn thoại này thành văn bản (${sttRes.error || 'STT error'}). Anh/chị nhắn chữ hoặc nói lại giúp em nhé! 🎙️`,
+        );
+        return;
+      }
+      text = sttRes.text;
+      await this.sendReply(msg.chatId, `🎙️ *(Đã nghe: "${text}")*`);
+    }
+
     // Save user message
+    const prismaMsgType =
+      msg.type === 'IMAGE'
+        ? MessageType.IMAGE
+        : msg.type === 'VOICE'
+          ? MessageType.VOICE
+          : msg.type === 'FILE'
+            ? MessageType.FILE
+            : MessageType.TEXT;
+
     await this.conversationsService.saveMessage({
       conversationId: conversation.id,
       externalMessageId: msg.externalMessageId,
       direction: MessageDirection.INBOUND,
       content: text,
-      type: msg.type === 'IMAGE' ? MessageType.IMAGE : MessageType.TEXT,
+      type: prismaMsgType,
       attachmentsJson: msg.attachments,
     });
 
@@ -167,6 +199,32 @@ export class AgentService {
       });
       if (rec?.fileId) {
         await this.conversationStateService.recordImage(conversation.id, rec.fileId);
+      }
+    }
+
+    // Record incoming user document/file if present in attachments
+    const fileAttachment = msg.attachments?.find((att) => att.type === 'FILE' && att.sourceUrl);
+    const incomingFileUrl = msg.fileUrl || fileAttachment?.sourceUrl;
+    if (incomingFileUrl) {
+      try {
+        const savedDoc = await this.filesService.downloadMediaSafely(
+          incomingFileUrl,
+          ownerId,
+          'application/octet-stream',
+          msg.fileName || fileAttachment?.fileName || `document-${Date.now()}`,
+          conversation.id,
+        );
+        await this.conversationStateService.recordFile(conversation.id, savedDoc.id);
+        if (!text) {
+          await this.sendReply(
+            msg.chatId,
+            `Dạ em đã nhận và lưu tệp tài liệu **${savedDoc.originalName}** (Mã: \`${savedDoc.id.slice(0, 8)}\`) rồi ạ 📄. Anh/chị muốn em tóm tắt nội dung, phân tích số liệu hay trích xuất thông tin gì từ tệp này ạ?`,
+          );
+          return;
+        }
+        text = `${text}\n[Tệp tài liệu đính kèm vừa nhận: ${savedDoc.originalName} (fileId: ${savedDoc.id})]`;
+      } catch (err: any) {
+        this.logger.warn(`[AGENT_FILE_DOWNLOAD_WARN] Failed downloading incoming file: ${err.message}`);
       }
     }
 
@@ -311,6 +369,9 @@ export class AgentService {
             `• /approve <code> - Phê duyệt thao tác nhạy cảm\n` +
             `• /deny <code> - Từ chối thao tác\n` +
             `• /files - Danh sách file đã tạo\n` +
+            `• /memories - Xem danh sách bộ nhớ dài hạn về bạn\n` +
+            `• /memory-del <id> - Xóa một ghi nhớ dài hạn theo ID\n` +
+            `• /briefing - Xem Bản tin sáng tổng hợp lịch trình & ghi nhớ\n` +
             `• /stickers - Danh sách nhóm sticker & số lượng ID\n` +
             `• /sticker <emotion> [count] - Test gửi sticker theo cảm xúc\n` +
             `• /sticker-reload - Nạp lại cấu hình stickers.json\n` +
@@ -743,6 +804,57 @@ export class AgentService {
         );
         return true;
 
+      case '/memories':
+        const memories = await this.prisma.memory.findMany({
+          where: { ownerId },
+          orderBy: [{ importance: 'desc' }, { updatedAt: 'desc' }],
+          take: 25,
+        });
+        if (memories.length === 0) {
+          await this.sendReply(
+            chatId,
+            '🧠 Hiện em chưa lưu ghi nhớ dài hạn nào. Anh/chị có thể bảo em: "Hãy nhớ là anh thích uống cà phê đen không đường" hoặc "Nhớ giúp anh số điện thoại...".',
+          );
+        } else {
+          const memLines = memories.map(
+            (m, idx) =>
+              `${idx + 1}. [\`${m.id.slice(0, 8)}\`] **[${m.category}]** (⭐${m.importance}/5): ${m.text}`,
+          );
+          await this.sendReply(
+            chatId,
+            `🧠 **BỘ NHỚ DÀI HẠN CỦA ANH/CHỊ (${memories.length}):**\n\n${memLines.join('\n')}\n\n💡 Để xóa một ghi nhớ, nhắn \`/memory-del <mã_id>\`.`,
+          );
+        }
+        return true;
+
+      case '/memory-del':
+        const memIdPrefix = args[0]?.trim();
+        if (!memIdPrefix) {
+          await this.sendReply(chatId, 'Dạ vui lòng nhập mã ID cần xóa. Ví dụ: `/memory-del 1a2b3c4d`.');
+          return true;
+        }
+        const matchedMemories = await this.prisma.memory.findMany({
+          where: {
+            ownerId,
+            id: { startsWith: memIdPrefix },
+          },
+        });
+        if (matchedMemories.length === 0) {
+          await this.sendReply(chatId, `Không tìm thấy ghi nhớ nào có mã bắt đầu bằng "${memIdPrefix}".`);
+          return true;
+        }
+        await this.prisma.memory.delete({ where: { id: matchedMemories[0].id } });
+        await this.sendReply(
+          chatId,
+          `🗑️ Đã xóa ghi nhớ: "${matchedMemories[0].text}" khỏi bộ nhớ dài hạn.`,
+        );
+        return true;
+
+      case '/briefing':
+        const briefingMsg = await this.schedulerService.buildMorningBriefing(ownerId, chatId);
+        await this.sendReply(chatId, briefingMsg);
+        return true;
+
       default:
         return false;
     }
@@ -789,6 +901,22 @@ export class AgentService {
       const nowVN = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
       const nowISO = new Date().toISOString();
 
+      // Load top long-term memories of owner to inject into System Prompt automatically
+      let memoryContextBlock = '';
+      try {
+        const topMemories = await this.prisma.memory?.findMany({
+          where: { ownerId },
+          orderBy: [{ importance: 'desc' }, { updatedAt: 'desc' }],
+          take: 10,
+        });
+        if (topMemories && topMemories.length > 0) {
+          const mList = topMemories.map((m) => `- [${m.category}] ${m.text}`).join('\n');
+          memoryContextBlock = `\n\nBộ nhớ dài hạn về Chủ sở hữu (Long-term Memories đang lưu):\n${mList}`;
+        }
+      } catch {
+        // Ignore if mock prisma in unit test doesn't stub memory.findMany
+      }
+
       const recentHistory = await this.conversationsService.getRecentMessages(conversationId, 10);
       const messages: LLMMessage[] = [
         {
@@ -802,8 +930,16 @@ export class AgentService {
             `- Thân thiện, nhanh nhẹn, có nét hóm hỉnh/dí dỏm nhẹ nhàng khi trò chuyện thân mật hoặc đùa vui. Tuyệt đối nghiêm túc, điềm đạm, chính xác khi xử lý lỗi, bảo mật, gửi email hoặc báo cáo quan trọng.\n` +
             `- KHÔNG nịnh nọt thảo mai, KHÔNG ngụy tạo tiến độ hay kết quả công cụ (chỉ báo hoàn thành khi tool thực sự hoàn thành).\n` +
             `- Phong cách nhắn tin Zalo: Viết câu trả lời tự nhiên, cô đọng, súc tích như khi chat. Tuyệt đối KHÔNG chèn quá nhiều dòng trống (\\n\\n) thừa thãi giữa các câu. Các ý cần mạch lạc và ngắn gọn để đọc dễ dàng trên màn hình điện thoại.\n\n` +
-            `Quy tắc Quản lý Nhắc nhở (Reliable Reminders):\n` +
-            `- Khi người dùng muốn đặt lời nhắc (ví dụ: "10 phút nữa nhắc...", "mai 8h nhắc...", "nhắc tôi họp lúc 14h"): BẮT BUỘC gọi tool create_reminder với dueAt (chuỗi ISO 8601 theo giờ UTC/ISO) và title. TUYỆT ĐỐI KHÔNG chỉ trả lời bằng lời hứa mà không gọi tool!\n` +
+            `Quy tắc Bộ nhớ dài hạn (Long-term Memory):\n` +
+            `- Khi người dùng chia sẻ thông tin cá nhân quan trọng, sở thích, thói quen, dị ứng, liên hệ, công việc hoặc dặn "nhớ giúp anh...": Hãy chủ động gọi tool memory_save.\n` +
+            `- Khi cần tra cứu thông tin cá nhân đã lưu hoặc xóa ghi nhớ cũ: Gọi tool memory_search hoặc memory_delete.\n\n` +
+            `Quy tắc Tìm kiếm Web & Đọc Link (Web Search & Fetch URL):\n` +
+            `- Khi người dùng hỏi thông tin thời sự, giá vàng, tỷ giá, thời tiết, tin tức mới nhất hoặc sự kiện thực tế: BẮT BUỘC gọi tool web_search để lấy thông tin mới nhất.\n` +
+            `- Khi người dùng gửi một đường link URL (http/https) và yêu cầu đọc, tóm tắt hoặc phân tích nội dung trang web đó: BẮT BUỘC gọi tool fetch_url.\n\n` +
+            `Quy tắc Đọc Tài liệu Đính kèm (Inbound Document Reader):\n` +
+            `- Khi người dùng gửi hoặc hỏi về nội dung của một tệp tài liệu (.xlsx, .docx, .pdf, .csv, .txt): BẮT BUỘC gọi tool read_uploaded_document để trích xuất văn bản/bảng biểu rồi mới phân tích hoặc tóm tắt.\n\n` +
+            `Quy tắc Quản lý Nhắc nhở & Lặp lại (Reliable & Recurring Reminders):\n` +
+            `- Khi người dùng muốn đặt lời nhắc (ví dụ: "10 phút nữa nhắc...", "mai 8h nhắc...", "mỗi ngày lúc 8h tối nhắc uống thuốc"): BẮT BUỘC gọi tool create_reminder với dueAt (chuỗi ISO 8601), title, và recurrence ('NONE' | 'DAILY' | 'WEEKLY' | 'WEEKDAYS' | 'MONTHLY' nếu có lặp lại). TUYỆT ĐỐI KHÔNG chỉ trả lời bằng lời hứa mà không gọi tool!\n` +
             `- Khi người dùng muốn dời lịch nhắc việc (ví dụ: "dời thêm 15 phút", "hoãn lại 30 phút"): BẮT BUỘC gọi tool reschedule_reminder.\n` +
             `- Khi người dùng muốn hủy lời nhắc (ví dụ: "hủy nhắc việc vừa rồi", "thôi không cần nhắc nữa"): BẮT BUỘC gọi tool cancel_reminder.\n` +
             `- Khi người dùng hỏi các việc cần làm/nhắc việc: BẮT BUỘC gọi tool list_reminders.\n\n` +
@@ -821,6 +957,7 @@ export class AgentService {
             `- Khi người dùng hỏi nội dung hoặc thông tin trong ảnh (ví dụ: "ảnh đó có thông tin gì", "ảnh này là gì", "đọc chữ trong ảnh"): BẮT BUỘC gọi tool analyze_existing_image với mediaId tương ứng. Nếu kết quả tool báo mô hình không hỗ trợ thị giác (Vision), hãy giải thích trung thực cho người dùng, TUYỆT ĐỐI KHÔNG tự bịa đặt nội dung ảnh!\n` +
             `- Khi người dùng đưa ra nhiều yêu cầu trong cùng một câu (ví dụ: "Ảnh đó có thông tin gì? Gửi lại coi."): BẮT BUỘC gọi cả hai công cụ tương ứng (analyze_existing_image và resend_existing_media). Nếu phân tích vision bị giới hạn, VẪN PHẢI gửi lại ảnh bằng resend_existing_media (Partial Success)!\n` +
             `- Khi người dùng hỏi danh sách tệp/ảnh trong hội thoại: Gọi tool get_recent_media.` +
+            memoryContextBlock +
             (injectedContextPrompt ? `\n\n${injectedContextPrompt}` : ''),
         },
       ];

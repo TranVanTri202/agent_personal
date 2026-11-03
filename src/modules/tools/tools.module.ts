@@ -1,7 +1,8 @@
 import { Global, Module } from '@nestjs/common';
 import { ToolRegistry } from './tool.registry';
-import { CreateExcelTool, CreatePdfTool, CreateWordTool } from './impl/document.tools';
-import { MemorySaveTool, MemorySearchTool } from './impl/memory.tools';
+import { CreateExcelTool, CreatePdfTool, CreateWordTool, ReadDocumentTool } from './impl/document.tools';
+import { MemorySaveTool, MemorySearchTool, MemoryDeleteTool } from './impl/memory.tools';
+import { WebSearchTool, FetchUrlTool } from './impl/web.tools';
 import {
   CreateReminderTool,
   ListRemindersTool,
@@ -23,8 +24,12 @@ import { ImageGenerationModule } from '../image-generation/image-generation.modu
     CreateExcelTool,
     CreatePdfTool,
     CreateWordTool,
+    ReadDocumentTool,
     MemorySaveTool,
     MemorySearchTool,
+    MemoryDeleteTool,
+    WebSearchTool,
+    FetchUrlTool,
     CreateReminderTool,
     ListRemindersTool,
     GetReminderTool,

@@ -1,7 +1,10 @@
+export type RecurrenceRule = 'NONE' | 'DAILY' | 'WEEKLY' | 'WEEKDAYS' | 'MONTHLY';
+
 export interface ParsedReminderTime {
   success: boolean;
   dueAt?: Date;
   title?: string;
+  recurrence?: RecurrenceRule;
   isAmbiguous?: boolean;
   clarificationPrompt?: string;
   isReschedule?: boolean;
@@ -161,11 +164,86 @@ export class ReminderTimeParser {
       title = 'công việc đã hẹn';
     }
 
+    const recurrence = ReminderTimeParser.detectRecurrence(lower);
+
     return {
       success: true,
       dueAt,
       title,
+      recurrence,
       rawMatched: matchedText,
     };
+  }
+
+  static detectRecurrence(text: string): RecurrenceRule {
+    const lower = text.toLowerCase();
+    if (
+      lower.includes('thứ 2 đến thứ 6') ||
+      lower.includes('thứ hai đến thứ sáu') ||
+      lower.includes('ngày làm việc') ||
+      lower.includes('weekdays')
+    ) {
+      return 'WEEKDAYS';
+    }
+    if (
+      lower.includes('hàng ngày') ||
+      lower.includes('hằng ngày') ||
+      lower.includes('mỗi ngày') ||
+      lower.includes('mỗi sáng') ||
+      lower.includes('mỗi tối') ||
+      lower.includes('mỗi trưa') ||
+      lower.includes('mỗi chiều')
+    ) {
+      return 'DAILY';
+    }
+    if (lower.includes('hàng tuần') || lower.includes('hằng tuần') || lower.includes('mỗi tuần')) {
+      return 'WEEKLY';
+    }
+    if (lower.includes('hàng tháng') || lower.includes('hằng tháng') || lower.includes('mỗi tháng')) {
+      return 'MONTHLY';
+    }
+    return 'NONE';
+  }
+
+  static computeNextDueAt(currentDueAt: Date, recurrence: RecurrenceRule): Date | null {
+    if (!recurrence || recurrence === 'NONE') return null;
+    const next = new Date(currentDueAt.getTime());
+    const now = Date.now();
+
+    const advanceOnce = (d: Date) => {
+      if (recurrence === 'DAILY') {
+        d.setDate(d.getDate() + 1);
+      } else if (recurrence === 'WEEKLY') {
+        d.setDate(d.getDate() + 7);
+      } else if (recurrence === 'MONTHLY') {
+        d.setMonth(d.getMonth() + 1);
+      } else if (recurrence === 'WEEKDAYS') {
+        do {
+          d.setDate(d.getDate() + 1);
+        } while (d.getDay() === 0 || d.getDay() === 6);
+      }
+    };
+
+    advanceOnce(next);
+    while (next.getTime() <= now) {
+      advanceOnce(next);
+    }
+    return next;
+  }
+
+  static encodeNoteWithRecurrence(note?: string | null, recurrence?: RecurrenceRule): string | null {
+    const cleanNote = (note || '').replace(/\[RECUR:[A-Z]+\]\s*/g, '').trim();
+    if (recurrence && recurrence !== 'NONE') {
+      return cleanNote ? `[RECUR:${recurrence}] ${cleanNote}` : `[RECUR:${recurrence}]`;
+    }
+    return cleanNote || null;
+  }
+
+  static extractRecurrenceFromNote(note?: string | null): { recurrence: RecurrenceRule; cleanNote: string | null } {
+    if (!note) return { recurrence: 'NONE', cleanNote: null };
+    const match = note.match(/\[RECUR:(DAILY|WEEKLY|WEEKDAYS|MONTHLY)\]/i);
+    const recurrence = match ? (match[1].toUpperCase() as RecurrenceRule) : 'NONE';
+    const cleanNote = note.replace(/\[RECUR:[A-Z]+\]\s*/gi, '').trim() || null;
+    return { recurrence, cleanNote };
   }
 }

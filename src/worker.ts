@@ -1,3 +1,6 @@
+// Mark process as dedicated background worker so ZaloPollerService does not double-poll
+process.env.IS_WORKER_PROCESS = 'true';
+
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { AppLoggerService } from './common/logger/pino-logger.service';
@@ -10,7 +13,7 @@ async function bootstrapWorker() {
   const logger = app.get(AppLoggerService);
   app.useLogger(logger);
 
-  logger.log('⚙️ Personal Zalo AI Agent Worker process started and listening for BullMQ jobs...');
+  logger.log('⚙️ Personal Zalo AI Agent Worker process started (Zalo polling skipped to avoid conflict with main server)...');
 
   // Handle graceful shutdown
   const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM'];

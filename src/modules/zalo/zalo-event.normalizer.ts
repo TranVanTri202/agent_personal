@@ -9,14 +9,16 @@ export interface NormalizedIncomingMessage {
   senderName?: string;
   chatId: string;
   chatType: 'PRIVATE' | 'GROUP';
-  type: 'TEXT' | 'IMAGE' | 'VOICE' | 'STICKER' | 'UNSUPPORTED';
+  type: 'TEXT' | 'IMAGE' | 'VOICE' | 'FILE' | 'STICKER' | 'UNSUPPORTED';
   text?: string;
   caption?: string;
   stickerId?: string;
   imageUrl?: string;
   voiceUrl?: string;
+  fileUrl?: string;
+  fileName?: string;
   replyToMessageId?: string;
-  attachments: Array<{ type: 'IMAGE' | 'VOICE' | 'OTHER'; sourceUrl?: string }>;
+  attachments: Array<{ type: 'IMAGE' | 'VOICE' | 'FILE' | 'OTHER'; sourceUrl?: string; fileName?: string }>;
   sentAt: Date;
   rawEvent: unknown;
 }
@@ -55,6 +57,8 @@ export class ZaloEventNormalizer {
     let stickerId: string | undefined = undefined;
     let imageUrl: string | undefined = undefined;
     let voiceUrl: string | undefined = undefined;
+    let fileUrl: string | undefined = undefined;
+    let fileName: string | undefined = undefined;
     const attachments: NormalizedIncomingMessage['attachments'] = [];
 
     // Extract sticker if present
@@ -72,6 +76,12 @@ export class ZaloEventNormalizer {
       type = 'VOICE';
       voiceUrl = msg.voiceUrl || msg.raw?.voice_url;
       attachments.push({ type: 'VOICE', sourceUrl: voiceUrl });
+    } else if (msg.fileUrl || msg.raw?.file_url || msg.raw?.document?.url) {
+      type = 'FILE';
+      fileUrl = msg.fileUrl || msg.raw?.file_url || msg.raw?.document?.url;
+      fileName = msg.fileName || msg.raw?.file_name || msg.raw?.document?.file_name || 'uploaded-file';
+      caption = msg.caption || msg.text;
+      attachments.push({ type: 'FILE', sourceUrl: fileUrl, fileName });
     } else if (msg.text) {
       type = 'TEXT';
       text = msg.text;
@@ -106,6 +116,8 @@ export class ZaloEventNormalizer {
       stickerId,
       imageUrl,
       voiceUrl,
+      fileUrl,
+      fileName,
       replyToMessageId,
       attachments,
       sentAt,
@@ -149,9 +161,11 @@ export class ZaloEventNormalizer {
     let stickerId: string | undefined = undefined;
     let imageUrl: string | undefined = undefined;
     let voiceUrl: string | undefined = undefined;
+    let fileUrl: string | undefined = undefined;
+    let fileName: string | undefined = undefined;
     const attachments: NormalizedIncomingMessage['attachments'] = [];
 
-    if (eventName === 'message.text.received' || (!eventName && message.text && !message.sticker && !message.photo_url)) {
+    if (eventName === 'message.text.received' || (!eventName && message.text && !message.sticker && !message.photo_url && !message.file_url)) {
       type = 'TEXT';
       text = message.text || '';
     } else if (eventName === 'message.image.received' || message.photo_url || message.photo) {
@@ -163,6 +177,12 @@ export class ZaloEventNormalizer {
       type = 'VOICE';
       voiceUrl = message.voice_url || message.url;
       attachments.push({ type: 'VOICE', sourceUrl: voiceUrl });
+    } else if (eventName === 'message.file.received' || message.file_url || message.document) {
+      type = 'FILE';
+      fileUrl = message.file_url || message.document?.url || message.url;
+      fileName = message.file_name || message.document?.file_name || 'uploaded-file';
+      caption = message.caption || message.text || undefined;
+      attachments.push({ type: 'FILE', sourceUrl: fileUrl, fileName });
     } else if (eventName === 'message.sticker.received' || message.sticker || message.sticker_id) {
       type = 'STICKER';
       stickerId = String(message.sticker || message.sticker_id || message.url);
@@ -195,6 +215,8 @@ export class ZaloEventNormalizer {
       stickerId,
       imageUrl,
       voiceUrl,
+      fileUrl,
+      fileName,
       replyToMessageId,
       attachments,
       sentAt,

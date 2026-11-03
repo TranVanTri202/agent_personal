@@ -90,12 +90,10 @@ describe('Supabase Temporary Storage Subsystem (24-Hour TTL)', () => {
       mockLogger,
     );
 
-    const mockR2Provider: any = { isConfigured: () => false };
     storageService = new StorageService(
       mockConfigService,
       mockPrisma,
       localProvider,
-      mockR2Provider,
       supabaseClient,
       temporaryStorageService,
       mockLogger,

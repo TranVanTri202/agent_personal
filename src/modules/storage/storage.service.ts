@@ -3,7 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.service';
 import { LocalStorageProvider } from './local-storage.provider';
-import { R2StorageProvider } from './r2-storage.provider';
 import { SupabaseStorageClient } from './supabase-storage.client';
 import { TemporaryStorageService } from './temporary-storage.service';
 import { ActorContext, FileExpiredError, FileAccessDeniedError } from './temporary-storage.types';
@@ -16,7 +15,6 @@ export class StorageService {
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
     private readonly localProvider: LocalStorageProvider,
-    private readonly r2Provider: R2StorageProvider,
     private readonly supabaseStorageClient: SupabaseStorageClient,
     private readonly temporaryStorageService: TemporaryStorageService,
     private readonly logger: AppLoggerService,

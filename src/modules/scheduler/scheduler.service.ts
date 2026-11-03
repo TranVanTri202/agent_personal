@@ -4,6 +4,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppLoggerService } from '../../common/logger/pino-logger.service';
 import { ZaloApiClient } from '../zalo/zalo-api.client';
+import { ReminderTimeParser, RecurrenceRule } from './reminder-time-parser';
 import { Reminder } from '@prisma/client';
 
 export const REMINDER_QUEUE_NAME = 'reminders-queue';
@@ -33,6 +34,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit() {
+    if (process.env.IS_WORKER_PROCESS === 'true') {
+      this.logger.log('[SCHEDULER] Worker process initialized; periodic reconciliation runs on main server.');
+      return;
+    }
+
     this.logger.log('[SCHEDULER] Initializing Scheduler Service and running reconciliation...');
     // Reconcile pending reminders upon startup
     await this.reconcileReminders().catch((err) => {
@@ -63,9 +69,10 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     title: string;
     dueAt: Date;
     note?: string;
+    recurrence?: RecurrenceRule;
     createdFromMessageId?: string;
     sourceConversationId?: string;
-  }): Promise<{ success: boolean; reminder?: Reminder; formattedTime?: string; error?: string }> {
+  }): Promise<{ success: boolean; reminder?: Reminder; formattedTime?: string; recurrence?: RecurrenceRule; error?: string }> {
     const now = new Date();
     // Validate dueAt is at least 3 seconds in the future
     if (params.dueAt.getTime() <= now.getTime() + 3000) {
@@ -82,9 +89,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       });
       if (existing) {
         this.logger.warn(`[REMINDER] Duplicate message ${params.createdFromMessageId} detected. Returning existing reminder.`);
+        const { recurrence: existingRec } = ReminderTimeParser.extractRecurrenceFromNote(existing.note);
         return {
           success: true,
           reminder: existing,
+          recurrence: existingRec,
           formattedTime: existing.dueAt.toLocaleTimeString('vi-VN', {
             hour: '2-digit',
             minute: '2-digit',
@@ -94,13 +103,16 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    const effectiveRecurrence = params.recurrence || ReminderTimeParser.detectRecurrence(params.title);
+    const encodedNote = ReminderTimeParser.encodeNoteWithRecurrence(params.note, effectiveRecurrence);
+
     // 1. Save to PostgreSQL
     const reminder = await this.prisma.reminder.create({
       data: {
         ownerId: params.ownerId,
         recipientChatId: params.chatId,
         title: params.title.trim(),
-        note: params.note?.trim() || null,
+        note: encodedNote,
         dueAt: params.dueAt,
         status: 'SCHEDULED',
         revision: 1,
@@ -145,6 +157,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       return {
         success: true,
         reminder,
+        recurrence: effectiveRecurrence,
         formattedTime,
       };
     } catch (enqueueErr: any) {
@@ -354,14 +367,43 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
           try {
             await this.zaloClient.sendMessage(r.recipientChatId, lateMsg);
-            await this.prisma.reminder.update({
-              where: { id: r.id },
-              data: {
-                status: 'SENT',
-                sentAt: new Date(),
-                isLateNoticeSent: true,
-              },
-            });
+            const { recurrence } = ReminderTimeParser.extractRecurrenceFromNote(r.note);
+            const nextDueAt = ReminderTimeParser.computeNextDueAt(r.dueAt, recurrence);
+
+            if (nextDueAt) {
+              const nextRev = r.revision + 1;
+              await this.prisma.reminder.update({
+                where: { id: r.id },
+                data: {
+                  status: 'SCHEDULED',
+                  dueAt: nextDueAt,
+                  revision: nextRev,
+                  sentAt: new Date(),
+                  isLateNoticeSent: false,
+                },
+              });
+              const nextDelay = Math.max(0, nextDueAt.getTime() - Date.now());
+              await this.reminderQueue.add(
+                'deliver-reminder',
+                { reminderId: r.id, revision: nextRev },
+                {
+                  jobId: `reminder-${r.id}-${nextRev}`,
+                  delay: nextDelay,
+                  attempts: 3,
+                  backoff: { type: 'exponential', delay: 3000 },
+                  removeOnComplete: true,
+                },
+              );
+            } else {
+              await this.prisma.reminder.update({
+                where: { id: r.id },
+                data: {
+                  status: 'SENT',
+                  sentAt: new Date(),
+                  isLateNoticeSent: true,
+                },
+              });
+            }
             deliveredLate++;
             this.logger.log(`[REMINDER_RECONCILE] Delivered late reminder #${r.id} to ${r.recipientChatId}`);
           } catch (err: any) {
@@ -438,5 +480,63 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   async deleteReminder(id: string, ownerId: string): Promise<boolean> {
     const res = await this.cancelReminder(id, ownerId);
     return res.success;
+  }
+
+  /**
+   * Generates a Daily Morning Briefing summarizing today's reminders and key memories.
+   */
+  async buildMorningBriefing(ownerId: string, chatId?: string): Promise<string> {
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('vi-VN', {
+      weekday: 'long',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      timeZone: 'Asia/Ho_Chi_Minh',
+    });
+
+    const endOfDay = new Date(now.getTime() + 24 * 3600 * 1000);
+    const reminders = await this.prisma.reminder.findMany({
+      where: {
+        ownerId,
+        status: 'SCHEDULED',
+        dueAt: { gte: now, lte: endOfDay },
+        ...(chatId ? { recipientChatId: chatId } : {}),
+      },
+      orderBy: { dueAt: 'asc' },
+      take: 10,
+    });
+
+    const memories = await this.prisma.memory.findMany({
+      where: { ownerId },
+      orderBy: [{ importance: 'desc' }, { updatedAt: 'desc' }],
+      take: 5,
+    });
+
+    let briefing = `☀️ **BẢN TIN SÁNG (${dateStr})**\nChúc anh/chị một ngày mới tràn đầy năng lượng và hiệu quả!\n\n`;
+
+    if (reminders.length === 0) {
+      briefing += `⏰ **Lịch nhắc việc trong 24h tới:**\n• Chưa có lời nhắc nào được lên lịch.\n`;
+    } else {
+      const rLines = reminders.map((r, idx) => {
+        const t = r.dueAt.toLocaleTimeString('vi-VN', {
+          hour: '2-digit',
+          minute: '2-digit',
+          timeZone: 'Asia/Ho_Chi_Minh',
+        });
+        const { recurrence } = ReminderTimeParser.extractRecurrenceFromNote(r.note);
+        const recLabel = recurrence !== 'NONE' ? ` 🔄(${recurrence})` : '';
+        return `${idx + 1}. **${t}** - ${r.title}${recLabel}`;
+      });
+      briefing += `⏰ **Lịch nhắc việc trong 24h tới (${reminders.length}):**\n${rLines.join('\n')}\n`;
+    }
+
+    if (memories.length > 0) {
+      const mLines = memories.map((m) => `• [${m.category}] ${m.text}`);
+      briefing += `\n🧠 **Ghi nhớ quan trọng của anh/chị:**\n${mLines.join('\n')}\n`;
+    }
+
+    briefing += `\n💡 Anh/chị cần em lên lịch nhắc việc mới, kiểm tra email hay tra cứu thông tin gì hôm nay cứ nhắn em nhé!`;
+    return briefing;
   }
 }

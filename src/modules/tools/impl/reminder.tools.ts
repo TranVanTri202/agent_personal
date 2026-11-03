@@ -1,19 +1,24 @@
 import { Injectable } from '@nestjs/common';
 import { AgentTool, ToolExecutionContext } from '../tool.interface';
 import { SchedulerService } from '../../scheduler/scheduler.service';
-import { ReminderTimeParser } from '../../scheduler/reminder-time-parser';
+import { ReminderTimeParser, RecurrenceRule } from '../../scheduler/reminder-time-parser';
 
 @Injectable()
 export class CreateReminderTool implements AgentTool {
   name = 'create_reminder';
   description =
-    'Tạo lịch nhắc nhở việc cần làm theo thời gian chỉ định (theo múi giờ Asia/Ho_Chi_Minh). Hệ thống sẽ tự động gửi tin nhắn Zalo chủ động nhắc nhở khi đến giờ hẹn mà không cần người dùng hỏi lại.';
+    'Tạo lịch nhắc nhở việc cần làm theo thời gian chỉ định (theo múi giờ Asia/Ho_Chi_Minh), hỗ trợ nhắc 1 lần hoặc nhắc lặp lại định kỳ (hàng ngày, hàng tuần, ngày làm việc, hàng tháng). Hệ thống sẽ tự động gửi tin nhắn Zalo chủ động nhắc nhở khi đến giờ hẹn.';
   riskLevel: 'LOW' = 'LOW';
   inputSchema = {
     type: 'object',
     properties: {
       title: { type: 'string', description: 'Nội dung hoặc hành động cần nhắc (ví dụ: làm việc, uống nước, gọi điện khách hàng)' },
       dueAt: { type: 'string', description: 'Thời gian nhắc nhở định dạng ISO 8601 (ví dụ: 2026-10-29T10:10:00+07:00)' },
+      recurrence: {
+        type: 'string',
+        enum: ['NONE', 'DAILY', 'WEEKLY', 'WEEKDAYS', 'MONTHLY'],
+        description: 'Chế độ lặp lại định kỳ: NONE (1 lần), DAILY (hàng ngày), WEEKLY (hàng tuần), WEEKDAYS (thứ 2 - thứ 6), MONTHLY (hàng tháng)',
+      },
       note: { type: 'string', description: 'Ghi chú bổ sung nếu có' },
     },
     required: ['title', 'dueAt'],
@@ -25,7 +30,10 @@ export class CreateReminderTool implements AgentTool {
     return false;
   }
 
-  async execute(input: { title?: string; name?: string; dueAt?: string; runAtIso?: string; note?: string }, context: ToolExecutionContext): Promise<any> {
+  async execute(
+    input: { title?: string; name?: string; dueAt?: string; runAtIso?: string; recurrence?: RecurrenceRule; note?: string },
+    context: ToolExecutionContext,
+  ): Promise<any> {
     const title = (input.title || input.name || 'công việc đã hẹn').trim();
     const rawTime = input.dueAt || input.runAtIso;
 
@@ -50,6 +58,7 @@ export class CreateReminderTool implements AgentTool {
       chatId: context.chatId,
       title,
       dueAt,
+      recurrence: input.recurrence,
       note: input.note,
       sourceConversationId: context.conversationId,
     });
@@ -61,14 +70,18 @@ export class CreateReminderTool implements AgentTool {
       };
     }
 
+    const recText =
+      res.recurrence && res.recurrence !== 'NONE' ? ` (Lặp lại: **${res.recurrence}** 🔄)` : '';
+
     return {
       success: true,
       id: res.reminder.id,
       reminderId: res.reminder.id,
       title: res.reminder.title,
       dueAt: res.reminder.dueAt.toISOString(),
+      recurrence: res.recurrence || 'NONE',
       formattedTime: res.formattedTime,
-      message: `Dạ vâng ạ! Em đã đặt lời nhắc **${res.reminder.title}** lúc **${res.formattedTime}** rồi nhé ⏰`,
+      message: `Dạ vâng ạ! Em đã đặt lời nhắc **${res.reminder.title}** lúc **${res.formattedTime}**${recText} rồi nhé ⏰`,
     };
   }
 }

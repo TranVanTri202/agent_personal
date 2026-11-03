@@ -29,6 +29,11 @@ export class ZaloPollerService implements OnModuleInit, OnModuleDestroy {
   async onModuleInit() {
     this.attachCanonicalHandler();
 
+    if (process.env.IS_WORKER_PROCESS === 'true') {
+      this.logger.log('[ZALO_RECEIVER] Dedicated Worker process detected: Zalo polling disabled to prevent double-polling.');
+      return;
+    }
+
     if (this.mode === 'polling' && process.env.NODE_ENV !== 'test') {
       await this.startPolling();
     } else if (process.env.NODE_ENV === 'test') {
